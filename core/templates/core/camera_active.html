@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <title>Borne de Contrôle d'Accès</title>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans transition-colors duration-500" id="body-bg">
+
+    <main class="container mx-auto max-w-xl pt-12 p-4 text-center">
+        <h1 class="text-3xl font-extrabold tracking-tight mb-2 text-indigo-400">📷 SCANNER DE SÉCURITÉ</h1>
+        <p class="text-slate-400 text-sm mb-6">Choisissez votre caméra et présentez le QR Code.</p>
+
+        <div class="mb-6 max-w-xs mx-auto">
+            <label for="camera-select" class="block text-left text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                🔄 Sélectionner la caméra :
+            </label>
+            <select id="camera-select" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition">
+                <option value="">Chargement des caméras...</option>
+            </select>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-2xl mb-8 overflow-hidden">
+            <div id="reader" style="width: 100%; min-height: 300px;" class="rounded-xl bg-black"></div>
+        </div>
+
+        <div id="status-card" class="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl">
+            <div id="status-icon" class="text-4xl mb-2">🔄</div>
+            <h2 id="status-title" class="text-xl font-bold">En attente...</h2>
+            <p id="status-desc" class="text-slate-400 text-sm mt-1">Sélectionnez une caméra pour démarrer.</p>
+        </div>
+    </main>
+
+    <script>
+        const bodyBg = document.getElementById('body-bg');
+        const statusCard = document.getElementById('status-card');
+        const statusIcon = document.getElementById('status-icon');
+        const statusTitle = document.getElementById('status-title');
+        const statusDesc = document.getElementById('status-desc');
+        const cameraSelect = document.getElementById('camera-select');
+        const targetUrl = `/verify-qr/${token}/`;
+
+        let html5QrCode = null;
+        let isProcessing = false;
+
+        // 1. Fonction appelée lors d'un scan réussi
+        function onScanSuccess(decodedText) {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            console.log("Lien détecté :", decodedText);
+
+            // Appel de l'API Django en tâche de fond
+            fetch(decodedText)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'ALLOWED') {
+                        bodyBg.className = "bg-emerald-950 text-slate-100 min-h-screen font-sans transition-colors duration-500";
+                        statusCard.className = "bg-emerald-900/40 border border-emerald-500 rounded-xl p-6 shadow-xl";
+                        statusIcon.innerText = "✅";
+                        statusTitle.innerText = "ACCÈS AUTORISÉ";
+                        statusDesc.innerText = `Bienvenue, ${data.user} !`;
+                    } else {
+                        bodyBg.className = "bg-rose-950 text-slate-100 min-h-screen font-sans transition-colors duration-500";
+                        statusCard.className = "bg-rose-900/40 border border-rose-500 rounded-xl p-6 shadow-xl";
+                        statusIcon.innerText = "❌";
+                        statusTitle.innerText = `ACCÈS REFUSÉ (${data.status})`;
+                        statusDesc.innerText = "Ce QR Code n'est plus valide ou a déjà été utilisé.";
+                    }
+
+                    // Reset automatique après 3 secondes pour le pass suivant
+                    setTimeout(() => {
+                        bodyBg.className = "bg-slate-950 text-slate-100 min-h-screen font-sans transition-colors duration-500";
+                        statusCard.className = "bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl";
+                        statusIcon.innerText = "📷";
+                        statusTitle.innerText = "Scanner Prêt";
+                        statusDesc.innerText = "Présentez un QR Code devant l'objectif.";
+                        isProcessing = false;
+                    }, 3000);
+                })
+                .catch(err => {
+                    console.error("Erreur de validation:", err);
+                    isProcessing = false;
+                });
+        }
+
+        // 2. Démarrer une caméra spécifique par son ID
+        function startCamera(cameraId) {
+            if (!cameraId) return;
+
+            // Si un scanner tourne déjà, on l'arrête proprement avant de changer
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    initScanner(cameraId);
+                }).catch(err => console.error(err));
+            } else {
+                initScanner(cameraId);
+            }
+        }
+
+        function initScanner(cameraId) {
+            html5QrCode = new Html5Qrcode("reader");
+            // Optimisation expérimentale de la sensibilité (formats, fréquences)
+            const config = { 
+                fps: 15, 
+                qrbox: { width: 260, height: 260 },
+                aspectRatio: 1.0
+            };
+
+            html5QrCode.start(cameraId, config, onScanSuccess)
+                .then(() => {
+                    statusIcon.innerText = "📷";
+                    statusTitle.innerText = "Scanner Prêt";
+                    statusDesc.innerText = "Présentez un QR Code de manière stable.";
+                })
+                .catch(err => {
+                    statusIcon.innerText = "⚠️";
+                    statusTitle.innerText = "Erreur d'allumage";
+                    statusDesc.innerText = "Impossible de démarrer ce flux vidéo.";
+                });
+        }
+
+        // 3. Récupérer la liste des caméras disponibles au chargement de la page
+        Html5Qrcode.getCameras().then(devices => {
+            if (devices && devices.length > 0) {
+                cameraSelect.innerHTML = ""; // On vide l'état de chargement
+                
+                devices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.id;
+                    
+                    // Traduction des termes natifs pour identifier facilement la caméra arrière
+                    let label = device.label;
+                    if (label.toLowerCase().includes('back') || label.toLowerCase().includes('arrière') || label.toLowerCase().includes('environment')) {
+                        label = `📸 Caméra Arrière (${index + 1})`;
+                        option.selected = true; // On sélectionne la caméra arrière par défaut si trouvée !
+                    } else if (label.toLowerCase().includes('front') || label.toLowerCase().includes('avant') || label.toLowerCase().includes('user')) {
+                        label = `🤳 Caméra Avant (Selfie)`;
+                    } else {
+                        label = `🎥 Caméra ${index + 1} - ${device.label}`;
+                    }
+                    
+                    option.text = label;
+                    cameraSelect.appendChild(option);
+                });
+
+                // Écouter les changements du menu déroulant
+                cameraSelect.addEventListener('change', (e) => {
+                    startCamera(e.target.value);
+                });
+
+                // Lancement initial de la caméra présélectionnée
+                startCamera(cameraSelect.value);
+
+            } else {
+                statusTitle.innerText = "Aucune caméra détectée";
+            }
+        }).catch(err => {
+            console.error(err);
+            statusTitle.innerText = "Autorisation requise";
+            statusDesc.innerText = "Veuillez accepter l'accès à la caméra pour l'application.";
+        });
+    </script>
+</body>
+</html>
