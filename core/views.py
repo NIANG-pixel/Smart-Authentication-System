@@ -2,6 +2,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
+from core.services.vision_service import VisionService
+from core.services.access_service import AccessService
+from core.models import AccessLog
 from .models import UserProfile
 from .utils.qr_generator import generate_qr
 
@@ -90,14 +93,54 @@ def trigger_camera_view(request):
     return render(request, "core/camera_active.html")
 
 
+
 def access_page(request, user_id):
-    """
-    Page d'accès individuelle (historique)
-    """
-    user = AuthService.get_user_by_id(user_id)
-    if user:
-        AccessService.log_access(user, "QR ACCESSED", "Page d'accès consultée.")
-        
-    return render(request, "core/access.html", {
-        "user": user
-    })
+
+    user = UserProfile.objects.get(id=user_id)
+
+    access_granted = AccessService.verify_access(user)
+
+    if access_granted:
+        return render(
+            request,
+            "core/access.html",
+            {"user": user}
+        )
+
+    return render(
+        request,
+        "core/denied.html"
+    )
+
+
+class AccessService:
+
+    @staticmethod
+    def verify_access(user):
+
+        if not user.face_image:
+            return False
+
+        # 1. Liveness check
+        is_live = VisionService.check_liveness()
+
+        if not is_live:
+            AccessLog.objects.create(
+                user=user,
+                status="DENIED (FAKE OR NO LIVENESS)"
+            )
+            return False
+
+        # 2. Face verification
+        is_match = VisionService.verify_face(
+            user.face_image.path
+        )
+
+        status = "GRANTED" if is_match else "DENIED"
+
+        AccessLog.objects.create(
+            user=user,
+            status=status
+        )
+
+        return is_match
